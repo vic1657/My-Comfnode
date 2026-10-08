@@ -1,0 +1,19 @@
+# My-Comfnode 依赖清单
+# ComfyUI 本身已带 torch / torchvision / numpy / pillow / requests / aiohttp，无需重复安装
+# 安装方式：ComfyUI-Manager 会自动读取本文件安装；也可手动运行 install.bat
+
+# 图像处理（多个节点启动时必需）
+opencv-python
+
+# 模型相关
+einops
+timm
+transformers
+scipy
+huggingface_hub
+
+# 抠图 / 抠像
+mediapipe
+rembg
+pymatting
+transparent-background

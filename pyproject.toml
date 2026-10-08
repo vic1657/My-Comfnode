@@ -1,0 +1,10 @@
+[project]
+name = "my_comfnode"
+version = "0.1.0"
+description = "Project custom ComfyUI nodes"
+requires-python = ">=3.9"
+
+[tool.comfy]
+PublisherId = "my_comfnode"
+DisplayName = "My Comfnode"
+web = "web"
