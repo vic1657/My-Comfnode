@@ -139,4 +139,10 @@ NODE_DISPLAY_NAME_MAPPINGS.update(_my_video_frames.NODE_DISPLAY_NAME_MAPPINGS)
 NODE_DISPLAY_NAME_MAPPINGS.update(_image_mask_brush_v2.NODE_DISPLAY_NAME_MAPPINGS)
 NODE_DISPLAY_NAME_MAPPINGS.update(_dream_actor_v2.NODE_DISPLAY_NAME_MAPPINGS)
 
+# 兼容旧工作流：旧版本插件使用中文显示名作为节点类型注册，
+# 这里把中文显示名也注册为别名，保证旧工作流在任意机器上都能直接运行。
+for _cls_name, _disp_name in list(NODE_DISPLAY_NAME_MAPPINGS.items()):
+    if _cls_name in NODE_CLASS_MAPPINGS and _disp_name not in NODE_CLASS_MAPPINGS:
+        NODE_CLASS_MAPPINGS[_disp_name] = NODE_CLASS_MAPPINGS[_cls_name]
+
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "WEB_DIRECTORY"]
