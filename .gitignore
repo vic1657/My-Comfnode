@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+*.egg-info/
+
+# 打包产物
+dist/
+build/
+
+# 备份 / 临时文件
+_backup_*
+_migration_backup*
+_restore_backup*
+*.bak
+
+# IDE
+.vscode/
+.idea/
+
+# 系统
+Thumbs.db
+.DS_Store

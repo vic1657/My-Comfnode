@@ -1,0 +1,459 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    html, body {
+      background: #101114;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      width: 100%;
+    }
+    body {
+      font-family: Arial, sans-serif;
+    }
+    #root {
+      background: #15161a;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 8px;
+      box-sizing: border-box;
+      height: 100%;
+      overflow: hidden;
+      position: relative;
+      width: 100%;
+    }
+    canvas {
+      display: block;
+      height: 100%;
+      width: 100%;
+    }
+    #bar {
+      align-items: center;
+      display: flex;
+      gap: 8px;
+      left: 8px;
+      pointer-events: none;
+      position: absolute;
+      right: 8px;
+      top: 8px;
+    }
+    #status {
+      background: rgba(15, 16, 20, 0.78);
+      border: 1px solid rgba(255, 255, 255, 0.13);
+      border-radius: 5px;
+      color: rgba(255, 255, 255, 0.84);
+      flex: 1;
+      font-size: 12px;
+      min-width: 0;
+      overflow: hidden;
+      padding: 5px 8px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    button {
+      background: rgba(34, 38, 46, 0.88);
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      border-radius: 5px;
+      color: rgba(255, 255, 255, 0.9);
+      cursor: pointer;
+      flex: 0 0 auto;
+      font-size: 12px;
+      height: 28px;
+      padding: 0 10px;
+      pointer-events: auto;
+    }
+    button:hover {
+      background: rgba(52, 58, 70, 0.96);
+    }
+    #error {
+      align-items: center;
+      background: rgba(16, 17, 20, 0.92);
+      color: #f3b8b8;
+      display: none;
+      inset: 0;
+      justify-content: center;
+      padding: 20px;
+      position: absolute;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <div id="root">
+    <canvas id="view"></canvas>
+    <div id="bar">
+      <div id="status">loading</div>
+      <button id="fit">Fit</button>
+      <button id="reset">Reset</button>
+    </div>
+    <div id="error"></div>
+  </div>
+  <script type="module">
+    import * as THREE from "./vendor/three/three.module.js";
+    import { OrbitControls } from "./vendor/three/OrbitControls.js";
+    import { GLTFLoader } from "./vendor/three/loaders/GLTFLoader.js";
+
+    const canvas = document.getElementById("view");
+    const root = document.getElementById("root");
+    const statusEl = document.getElementById("status");
+    const errorEl = document.getElementById("error");
+    const fitBtn = document.getElementById("fit");
+    const resetBtn = document.getElementById("reset");
+
+    const state = {
+      model: null,
+      modelUrl: "",
+      modelName: "",
+      background: "#ffffff",
+      rotation: -108,
+      elevation: 47,
+      intensity: 2.6,
+      shadowOpacity: 0.18,
+      width: 1024,
+      height: 1024,
+      captureTimer: null,
+    };
+
+    function setStatus(text) {
+      statusEl.textContent = text || "";
+    }
+
+    function showError(text) {
+      errorEl.textContent = text || "";
+      errorEl.style.display = text ? "flex" : "none";
+      if (text) setStatus("error");
+    }
+
+    window.addEventListener("error", (event) => showError(event?.message || "viewer script error"));
+    window.addEventListener("unhandledrejection", (event) => {
+      showError(event?.reason?.message || String(event?.reason || "viewer promise error"));
+    });
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 500);
+    const renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      alpha: false,
+      canvas,
+      preserveDrawingBuffer: true,
+    });
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.setClearColor(0xffffff, 1);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.08;
+    controls.screenSpacePanning = true;
+    controls.minDistance = 0.2;
+    controls.maxDistance = 80;
+
+    const ambient = new THREE.HemisphereLight(0xffffff, 0x404040, 0.9);
+    scene.add(ambient);
+
+    const key = new THREE.DirectionalLight(0xffffff, 4.2);
+    key.position.set(4, 8, 5);
+    key.castShadow = true;
+    key.shadow.mapSize.set(2048, 2048);
+    key.shadow.camera.near = 0.1;
+    key.shadow.camera.far = 40;
+    key.shadow.camera.left = -12;
+    key.shadow.camera.right = 12;
+    key.shadow.camera.top = 12;
+    key.shadow.camera.bottom = -12;
+    key.shadow.bias = -0.0005;
+    key.shadow.normalBias = 0.02;
+    scene.add(key);
+    scene.add(key.target);
+
+    const fill = new THREE.DirectionalLight(0xffffff, 1.4);
+    fill.position.set(-5, 3, -4);
+    scene.add(fill);
+
+    const ground = new THREE.Mesh(
+      new THREE.PlaneGeometry(80, 80),
+      new THREE.ShadowMaterial({ color: 0x000000, opacity: 0.18 })
+    );
+    ground.rotation.x = -Math.PI / 2;
+    ground.receiveShadow = true;
+    scene.add(ground);
+
+    const loader = new GLTFLoader();
+
+    function clamp(value, min, max, fallback) {
+      const num = Number(value);
+      if (!Number.isFinite(num)) return fallback;
+      return Math.min(max, Math.max(min, num));
+    }
+
+    function setBackground(hex) {
+      state.background = /^#[0-9a-f]{6}$/i.test(hex || "") ? hex : "#ffffff";
+      const color = new THREE.Color(state.background);
+      scene.background = color;
+      renderer.setClearColor(color, 1);
+    }
+
+    function disposeObject(object) {
+      object?.traverse?.((child) => {
+        if (child.geometry) child.geometry.dispose?.();
+        const materials = Array.isArray(child.material) ? child.material : [child.material];
+        for (const material of materials) {
+          if (!material) continue;
+          for (const value of Object.values(material)) {
+            if (value?.isTexture) value.dispose?.();
+          }
+          material.dispose?.();
+        }
+      });
+    }
+
+    function updateGround(box) {
+      if (!box || !Number.isFinite(box.min.y)) return;
+      const size = box.getSize(new THREE.Vector3());
+      const center = box.getCenter(new THREE.Vector3());
+      ground.position.set(center.x, box.min.y - Math.max(size.y, 0.01) * 0.012, center.z);
+    }
+
+    function updateLighting() {
+      const azimuth = THREE.MathUtils.degToRad(state.rotation);
+      const elevation = THREE.MathUtils.degToRad(state.elevation);
+      const radius = 12;
+      const offset = new THREE.Vector3(
+        radius * Math.cos(elevation) * Math.sin(azimuth),
+        radius * Math.sin(elevation),
+        radius * Math.cos(elevation) * Math.cos(azimuth)
+      );
+      const target = controls.target.clone();
+
+      key.position.copy(target).add(offset);
+      key.target.position.copy(target);
+      key.intensity = state.intensity;
+      key.castShadow = state.shadowOpacity > 0.001;
+      key.shadow.radius = 2;
+
+      fill.position.copy(target).add(new THREE.Vector3(-offset.x * 0.45, Math.max(2.5, offset.y * 0.25 + 2.0), -offset.z * 0.45));
+      fill.intensity = 0.5;
+
+      if (ground.material) {
+        ground.material.opacity = state.shadowOpacity;
+        ground.material.needsUpdate = true;
+      }
+      ground.visible = state.shadowOpacity > 0.001;
+      renderer.shadowMap.enabled = state.shadowOpacity > 0.001;
+      if (state.shadowOpacity > 0.001) {
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      }
+    }
+
+    function renderOnce() {
+      renderer.render(scene, camera);
+    }
+
+    function queueCapture() {
+      clearTimeout(state.captureTimer);
+      state.captureTimer = setTimeout(() => {
+        try {
+          parent.postMessage({ type: "MYCOMFNODE_3D_CAPTURE_UPDATE", payload: capture() }, "*");
+        } catch (err) {
+          console.warn("[3DReference] capture update failed", err);
+        }
+      }, 180);
+    }
+
+    function fitCamera(resetAzimuth = true) {
+      if (!state.model) return;
+      const box = new THREE.Box3().setFromObject(state.model);
+      const size = box.getSize(new THREE.Vector3());
+      const center = box.getCenter(new THREE.Vector3());
+      const maxDim = Math.max(size.x, size.y, size.z, 0.01);
+      const distance = maxDim / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))) * 1.55;
+
+      controls.target.copy(center);
+      if (resetAzimuth) {
+        camera.position.set(center.x + distance * 0.78, center.y + distance * 0.42, center.z + distance * 0.88);
+      } else {
+        const dir = camera.position.clone().sub(controls.target).normalize();
+        if (!Number.isFinite(dir.x) || dir.lengthSq() < 0.001) dir.set(0.7, 0.35, 0.8).normalize();
+        camera.position.copy(center).add(dir.multiplyScalar(distance));
+      }
+      camera.near = Math.max(0.001, distance / 100);
+      camera.far = Math.max(100, distance * 100);
+      camera.updateProjectionMatrix();
+      controls.update();
+      updateGround(box);
+      updateLighting();
+      renderOnce();
+      queueCapture();
+    }
+
+    function normalizeModel(object) {
+      const box = new THREE.Box3().setFromObject(object);
+      const size = box.getSize(new THREE.Vector3());
+      const center = box.getCenter(new THREE.Vector3());
+      const maxDim = Math.max(size.x, size.y, size.z, 0.01);
+      const scale = 3.4 / maxDim;
+      object.position.sub(center).multiplyScalar(scale);
+      object.scale.multiplyScalar(scale);
+      object.traverse((child) => {
+        if (child.isMesh) {
+          child.castShadow = true;
+          child.receiveShadow = true;
+          const materials = Array.isArray(child.material) ? child.material : [child.material];
+          for (const material of materials) {
+            if (!material) continue;
+            material.needsUpdate = true;
+          }
+        }
+      });
+    }
+
+    function loadModel(model) {
+      if (!model?.url) {
+        setStatus("no model");
+        return;
+      }
+      if (model.url === state.modelUrl) {
+        queueCapture();
+        return;
+      }
+      state.modelUrl = model.url;
+      state.modelName = model.relative || model.name || "";
+      setStatus("loading " + state.modelName);
+      showError("");
+
+      loader.load(
+        model.url,
+        (gltf) => {
+          if (state.model) {
+            scene.remove(state.model);
+            disposeObject(state.model);
+          }
+          state.model = gltf.scene || gltf.scenes?.[0];
+          if (!state.model) {
+            state.modelUrl = "";
+            showError("model has no scene");
+            return;
+          }
+          normalizeModel(state.model);
+          scene.add(state.model);
+          setStatus(state.modelName);
+          fitCamera(true);
+        },
+        undefined,
+        (err) => {
+          console.error("[3DReference] model load failed", err);
+          state.modelUrl = "";
+          const status = err?.target?.status ? ` HTTP ${err.target.status}` : "";
+          const detail = err?.message || err?.target?.statusText || "";
+          showError(`load failed${status}: ${state.modelName}${detail ? " - " + detail : ""}`);
+        }
+      );
+    }
+
+    function resizeToDisplay() {
+      const rect = root.getBoundingClientRect();
+      const width = Math.max(16, Math.floor(rect.width));
+      const height = Math.max(16, Math.floor(rect.height));
+      renderer.setSize(width, height, false);
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+      renderOnce();
+    }
+
+    function cameraInfo() {
+      const target = controls.target.clone();
+      const position = camera.position.clone();
+      const rel = position.clone().sub(target);
+      const distance = rel.length();
+      const azimuth = THREE.MathUtils.radToDeg(Math.atan2(rel.x, rel.z));
+      const elevation = distance > 0 ? THREE.MathUtils.radToDeg(Math.asin(rel.y / distance)) : 0;
+      return {
+        position: [position.x, position.y, position.z].map((v) => Number(v.toFixed(5))),
+        target: [target.x, target.y, target.z].map((v) => Number(v.toFixed(5))),
+        azimuth: Number(azimuth.toFixed(3)),
+        elevation: Number(elevation.toFixed(3)),
+        distance: Number(distance.toFixed(5)),
+        fov: camera.fov,
+      };
+    }
+
+    function capture(width = state.width, height = state.height) {
+      const rect = root.getBoundingClientRect();
+      const oldWidth = Math.max(16, Math.floor(rect.width));
+      const oldHeight = Math.max(16, Math.floor(rect.height));
+      const outWidth = Math.max(16, Math.min(4096, Math.floor(width || state.width || 1024)));
+      const outHeight = Math.max(16, Math.min(4096, Math.floor(height || state.height || 1024)));
+
+      renderer.setSize(outWidth, outHeight, false);
+      camera.aspect = outWidth / outHeight;
+      camera.updateProjectionMatrix();
+      renderer.render(scene, camera);
+      const image = renderer.domElement.toDataURL("image/png");
+
+      renderer.setSize(oldWidth, oldHeight, false);
+      camera.aspect = oldWidth / oldHeight;
+      camera.updateProjectionMatrix();
+      renderOnce();
+
+      return {
+        image,
+        camera: cameraInfo(),
+        target: controls.target.toArray().map((v) => Number(v.toFixed(5))),
+        width: outWidth,
+        height: outHeight,
+        model_file: state.modelName,
+        rotation: Number(state.rotation.toFixed(3)),
+        elevation: Number(state.elevation.toFixed(3)),
+        intensity: Number(state.intensity.toFixed(3)),
+        shadow_opacity: Number(state.shadowOpacity.toFixed(3)),
+      };
+    }
+
+    function applyConfig(config) {
+      state.width = config.width || state.width;
+      state.height = config.height || state.height;
+      setBackground(config.background || state.background);
+      state.rotation = clamp(config.rotation, -180, 180, state.rotation);
+      state.elevation = clamp(config.elevation, 5, 85, state.elevation);
+      state.intensity = clamp(config.intensity, 0.2, 4, state.intensity);
+      state.shadowOpacity = clamp(config.shadow_opacity, 0, 0.5, state.shadowOpacity);
+      if (config.model) loadModel(config.model);
+      updateLighting();
+      resizeToDisplay();
+      queueCapture();
+    }
+
+    controls.addEventListener("change", () => {
+      renderOnce();
+      queueCapture();
+    });
+    fitBtn.addEventListener("click", () => fitCamera(false));
+    resetBtn.addEventListener("click", () => fitCamera(true));
+    window.addEventListener("resize", resizeToDisplay);
+    canvas.addEventListener("contextmenu", (event) => event.preventDefault());
+    window.addEventListener("message", (event) => {
+      const data = event.data || {};
+      if (data.type === "MYCOMFNODE_3D_INIT" || data.type === "MYCOMFNODE_3D_CONFIG") {
+        applyConfig(data.config || {});
+      } else if (data.type === "MYCOMFNODE_3D_CAPTURE") {
+        const config = data.config || {};
+        applyConfig(config);
+        parent.postMessage({ type: "MYCOMFNODE_3D_CAPTURE_RESULT", requestId: data.requestId, payload: capture(state.width, state.height) }, "*");
+      }
+    });
+
+    setBackground(state.background);
+    resizeToDisplay();
+    camera.position.set(3.6, 2.4, 4.2);
+    controls.target.set(0, 0, 0);
+    controls.update();
+    updateLighting();
+    renderOnce();
+    setStatus("ready");
+    parent.postMessage({ type: "MYCOMFNODE_3D_READY" }, "*");
+  </script>
+</body>
+</html>
